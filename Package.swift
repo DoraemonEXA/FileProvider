@@ -1,12 +1,10 @@
-// swift-tools-version:5.0
-// The swift-tools-version declares the minimum version of Swift required to build this package.
+// swift-tools-version:6.0
 
 import PackageDescription
 
 let package = Package(
     name: "FilesProvider",
     products: [
-        // Products define the executables and libraries produced by a package, and make them visible to other packages.
         .library(
             name: "FilesProvider",
             targets: ["FilesProvider"]
@@ -15,8 +13,18 @@ let package = Package(
     dependencies: [],
     targets: [
         .target(name: "FilesProvider",
-                dependencies: [],
-                path: "Sources"
+            dependencies: [],
+            path: "Sources",
+            sources: [
+                "Extensions",
+                "FPSStreamTask.swift",
+                "FTPFileProvider.swift",
+                "FTPHelper.swift",
+                "FileObject.swift",
+                "FileProvider.swift",
+                "RemoteSession.swift",
+                "ServerTrustPolicy.swift"
+            ]
         ),
         .testTarget(name: "FilesProviderTests",
                 dependencies: ["FilesProvider"],

@@ -118,7 +118,7 @@ extension SMB2 {
     // MARK: SMB2 Query Info
     
     struct QueryInfoRequest: SMBRequestBody {
-        static var command: SMB2.Command = .QUERY_INFO
+        static let command: SMB2.Command = .QUERY_INFO
         
         let header: Header
         let buffer: Data?

@@ -12,7 +12,7 @@ extension SMB2 {
     // MARK: SMB2 Create
     
     struct CreateRequest: SMBRequestBody {
-        static var command: SMB2.Command = .CREATE
+        static let command: SMB2.Command = .CREATE
         
         let header: CreateRequest.Header
         let name: String?
@@ -357,7 +357,7 @@ extension SMB2 {
     // MARK: SMB2 Close
     
     struct CloseRequest: SMBRequestBody {
-        static var command: SMB2.Command = .CLOSE
+        static let command: SMB2.Command = .CLOSE
         
         let size: UInt16
         let flags: CloseFlags
@@ -400,7 +400,7 @@ extension SMB2 {
     // MARK: SMB2 Flush
     
     struct FlushRequest: SMBRequestBody {
-        static var command: SMB2.Command = .FLUSH
+        static let command: SMB2.Command = .FLUSH
         
         let size: UInt16
         fileprivate let reserved: UInt16

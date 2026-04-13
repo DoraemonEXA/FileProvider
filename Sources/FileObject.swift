@@ -341,10 +341,10 @@ open class VolumeObject: NSObject {
 }
 
 /// Sorting FileObject array by given criteria, **not thread-safe**
-public struct FileObjectSorting {
+public struct FileObjectSorting: Sendable {
     
     /// Determines sort kind by which item of File object
-    public enum SortType {
+    public enum SortType: Sendable {
         /// Sorting by default Finder (case-insensitive) behavior
         case name
         /// Sorting by case-sensitive form of file name

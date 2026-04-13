@@ -17,11 +17,15 @@ import ImageIO
 public typealias ImageClass = NSImage
 #endif
 
+internal struct UnsafeSendableBox<Value>: @unchecked Sendable {
+    let value: Value
+}
+
 /// Completion handler type with an error argument
 public typealias SimpleCompletionHandler = ((_ error: Error?) -> Void)?
 
 /// This protocol defines FileProvider neccesary functions and properties to connect and get contents list
-public protocol FileProviderBasic: class, NSSecureCoding, CustomDebugStringConvertible {
+public protocol FileProviderBasic: AnyObject, NSSecureCoding, CustomDebugStringConvertible {
     /// An string to identify type of provider.
     static var type: String { get }
     
@@ -222,7 +226,7 @@ public func ==(lhs: FileProviderBasic, rhs: FileProviderBasic) -> Bool {
 }
 
 /// Cancels all active underlying tasks when deallocating remote providers
-public var fileProviderCancelTasksOnInvalidating = true
+nonisolated(unsafe) public var fileProviderCancelTasksOnInvalidating = true
 
 /// Extending `FileProviderBasic` for web-based file providers
 public protocol FileProviderBasicRemote: FileProviderBasic {
@@ -451,18 +455,26 @@ extension FileProviderOperations {
 
 extension FileProviderOperations {
     internal func delegateNotify(_ operation: FileOperationType, error: Error? = nil) {
+        let providerBox = UnsafeSendableBox(value: self)
+        let operationBox = UnsafeSendableBox(value: operation)
+        let errorBox = error.map(UnsafeSendableBox.init)
         DispatchQueue.main.async(execute: {
-            if let error = error {
-                self.delegate?.fileproviderFailed(self, operation: operation, error: error)
+            let provider = providerBox.value
+            let operation = operationBox.value
+            if let error = errorBox?.value {
+                provider.delegate?.fileproviderFailed(provider, operation: operation, error: error)
             } else {
-                self.delegate?.fileproviderSucceed(self, operation: operation)
+                provider.delegate?.fileproviderSucceed(provider, operation: operation)
             }
         })
     }
     
     internal func delegateNotify(_ operation: FileOperationType, progress: Double) {
+        let providerBox = UnsafeSendableBox(value: self)
+        let operationBox = UnsafeSendableBox(value: operation)
         DispatchQueue.main.async(execute: {
-            self.delegate?.fileproviderProgress(self, operation: operation, progress: Float(progress))
+            let provider = providerBox.value
+            provider.delegate?.fileproviderProgress(provider, operation: operationBox.value, progress: Float(progress))
         })
     }
 }
@@ -1195,7 +1207,7 @@ public enum FileOperationType: CustomStringConvertible {
 /// Delegate methods for reporting provider's operation result and progress, when it's ready to update
 /// user interface.
 /// All methods are called in main thread to avoids UI bugs.
-public protocol FileProviderDelegate: class {
+public protocol FileProviderDelegate: AnyObject {
     /// fileproviderSucceed(_:operation:) gives delegate a notification when an operation finished with success.
     /// This method is called in main thread to avoids UI bugs.
     func fileproviderSucceed(_ fileProvider: FileProviderOperations, operation: FileOperationType)
@@ -1209,7 +1221,7 @@ public protocol FileProviderDelegate: class {
 }
 
 /// The `FileOperationDelegate` protocol defines methods for managing operations involving the copying, moving, linking, or removal of files and directories. When you use an `FileProvider` object to initiate a copy, move, link, or remove operation, the file provider asks its delegate whether the operation should begin at all and whether it should proceed when an error occurs.
-public protocol FileOperationDelegate: class {
+public protocol FileOperationDelegate: AnyObject {
     
     /// fileProvider(_:shouldOperate:) gives the delegate an opportunity to filter the file operation. Returning true from this method will allow the copy to happen. Returning false from this method causes the item in question to be skipped. If the item skipped was a directory, no children of that directory will be subject of the operation, nor will the delegate be notified of those children.
     func fileProvider(_ fileProvider: FileProviderOperations, shouldDoOperation operation: FileOperationType) -> Bool

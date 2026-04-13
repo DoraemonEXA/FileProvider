@@ -850,7 +850,9 @@ internal extension FTPFileProvider {
                         onTask: ((_ task: FileProviderStreamTask) -> Void)?,
                         onProgress: ((_ bytesSent: Int64, _ totalSent: Int64, _ expectedBytes: Int64) -> Void)?,
                         completionHandler: @escaping (_ error: Error?) -> Void) {
+        let streamBox = UnsafeSendableBox(value: stream)
         operation_queue.addOperation {
+            let stream = streamBox.value
             let timeout = self.session.configuration.timeoutIntervalForResource
             var error: Error?
             let chunkSize = self.optimizedChunkSize(size)

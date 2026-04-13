@@ -12,7 +12,7 @@ extension SMB2 {
     // MARK: SMB2 Read
     
     struct ReadRequest: SMBRequestBody {
-        static var command: SMB2.Command = .READ
+        static let command: SMB2.Command = .READ
         
         let size: UInt16
         fileprivate let padding: UInt8
@@ -91,7 +91,7 @@ extension SMB2 {
     // MARK: SMB2 Write
     
     struct WriteRequest: SMBRequestBody {
-        static var command: SMB2.Command = .WRITE
+        static let command: SMB2.Command = .WRITE
         
         let header: WriteRequest.Header
         let channelInfo: ChannelInfo?
@@ -156,7 +156,7 @@ extension SMB2 {
     }
     
     struct ChannelInfo: SMBRequestBody {
-        static var command: SMB2.Command = .WRITE
+        static let command: SMB2.Command = .WRITE
         
         let offset: UInt64
         let token: UInt32
@@ -166,7 +166,7 @@ extension SMB2 {
     // MARK: SMB2 Lock
     
     struct LockElement: SMBRequestBody {
-        static var command: SMB2.Command = .LOCK
+        static let command: SMB2.Command = .LOCK
         
         let offset: UInt64
         let length: UInt64
@@ -188,7 +188,7 @@ extension SMB2 {
     }
     
     struct LockRequest: SMBRequestBody {
-        static var command: SMB2.Command = .LOCK
+        static let command: SMB2.Command = .LOCK
         
         let header: LockRequest.Header
         let locks: [LockElement]
@@ -227,7 +227,7 @@ extension SMB2 {
     // MARK: SMB2 Cancel
     
     struct CancelRequest: SMBRequestBody {
-        static var command: SMB2.Command = .CANCEL
+        static let command: SMB2.Command = .CANCEL
         
         let size: UInt16
         let reserved: UInt16

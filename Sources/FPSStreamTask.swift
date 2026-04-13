@@ -8,7 +8,7 @@
 
 import Foundation
 
-private var _lasttaskIdAssociated = 1_000_000_000
+nonisolated(unsafe) private var _lasttaskIdAssociated = 1_000_000_000
 let _lasttaskIdAssociated_lock: NSLock = NSLock()
 var lasttaskIdAssociated: Int {
     get {
@@ -30,7 +30,7 @@ var lasttaskIdAssociated: Int {
 // codebeat:disable[TOTAL_LOC,TOO_MANY_IVARS]
 /// This class is a replica of NSURLSessionStreamTask with same api for iOS 7/8
 /// while it can actually fallback to NSURLSessionStreamTask in iOS 9.
-public class FileProviderStreamTask: URLSessionTask, StreamDelegate {
+public class FileProviderStreamTask: URLSessionTask, StreamDelegate, @unchecked Sendable {
     fileprivate var inputStream: InputStream?
     fileprivate var outputStream: OutputStream?
     
@@ -61,7 +61,7 @@ public class FileProviderStreamTask: URLSessionTask, StreamDelegate {
     /// Force using `URLSessionStreamTask` for iOS 9 and later
     public let useURLSession: Bool
     @available(iOS 9.0, macOS 10.11, *)
-    fileprivate static var streamTasks = [Int: URLSessionStreamTask]()
+    nonisolated(unsafe) fileprivate static var streamTasks = [Int: URLSessionStreamTask]()
     
     @available(iOS 9.0, macOS 10.11, *)
     internal var _underlyingTask: URLSessionStreamTask? {

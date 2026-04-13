@@ -487,9 +487,8 @@ open class FTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOpera
             }
             let size = localFile.fileSize
             self.ftpStore(task, filePath: self.ftpPath(toPath), from: stream, size: size, onTask: { task in
-                weak var weakTask = task
-                progress.cancellationHandler = {
-                    weakTask?.cancel()
+                progress.cancellationHandler = { [weak task] in
+                    task?.cancel()
                 }
                 progress.setUserInfoObject(Date(), forKey: .startingTimeKey)
             }, onProgress: { bytesSent, totalSent, expectedBytes in
@@ -542,9 +541,8 @@ open class FTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOpera
                 return
             }
             self.ftpDownload(task, filePath: self.ftpPath(path), to: stream, onTask: { task in
-                weak var weakTask = task
-                progress.cancellationHandler = {
-                    weakTask?.cancel()
+                progress.cancellationHandler = { [weak task] in
+                    task?.cancel()
                 }
                 progress.setUserInfoObject(Date(), forKey: .startingTimeKey)
             }, onProgress: { recevied, totalReceived, totalSize in
@@ -606,9 +604,8 @@ open class FTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOpera
             
             let stream = OutputStream.toMemory()
             self.ftpDownload(task, filePath: self.ftpPath(path), from: offset, length: length, to: stream, onTask: { task in
-                weak var weakTask = task
-                progress.cancellationHandler = {
-                    weakTask?.cancel()
+                progress.cancellationHandler = { [weak task] in
+                    task?.cancel()
                 }
                 progress.setUserInfoObject(Date(), forKey: .startingTimeKey)
             }, onProgress: { recevied, totalReceived, totalSize in
@@ -668,9 +665,8 @@ open class FTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOpera
                 let data = data ?? Data()
                 let stream = InputStream(data: data)
                 self.ftpStore(task, filePath: self.ftpPath(path), from: stream, size: Int64(data.count), onTask: { task in
-                    weak var weakTask = task
-                    progress.cancellationHandler = {
-                        weakTask?.cancel()
+                    progress.cancellationHandler = { [weak task] in
+                        task?.cancel()
                     }
                     progress.setUserInfoObject(Date(), forKey: .startingTimeKey)
                 }, onProgress: { bytesSent, totalSent, expectedBytes in
@@ -731,9 +727,8 @@ open class FTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOpera
             }
             
             self.ftpDownloadData(task, filePath: self.ftpPath(path), from: offset, length: length, onTask: { task in
-                weak var weakTask = task
-                progress.cancellationHandler = {
-                    weakTask?.cancel()
+                progress.cancellationHandler = { [weak task] in
+                    task?.cancel()
                 }
                 progress.setUserInfoObject(Date(), forKey: .startingTimeKey)
             }, onProgress: { data, recevied, totalReceived, totalSize in

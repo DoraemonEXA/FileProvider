@@ -132,7 +132,7 @@ extension URLRequest {
 }
 
 /// Holds file MIME, and introduces selected type MIME as constants
-public struct ContentMIMEType: RawRepresentable, Hashable, Equatable {
+public struct ContentMIMEType: RawRepresentable, Hashable, Equatable, Sendable {
     public var rawValue: String
     public typealias RawValue = String
     
@@ -531,7 +531,7 @@ extension TimeInterval {
 
 extension Date {
     /// Date formats used commonly in internet messaging defined by various RFCs.
-    public enum RFCStandards: String {
+    public enum RFCStandards: String, Sendable {
         /// Obsolete (2-digit year) date format defined by RFC 822 for http.
         case rfc822 = "EEE',' dd' 'MMM' 'yy HH':'mm':'ss z"
         /// Obsolete (2-digit year) date format defined by RFC 850 for usenet.
