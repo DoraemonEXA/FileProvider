@@ -478,6 +478,8 @@ public class FileProviderStreamTask: URLSessionTask, StreamDelegate, @unchecked 
         }
         
         guard let inputStream = inputStream else {
+            let errorCode: URLError.Code = (self.state == .canceling || self.state == .completed) ? .cancelled : .cannotConnectToHost
+            completionHandler(nil, true, URLError(errorCode))
             return
         }
         
@@ -537,9 +539,8 @@ public class FileProviderStreamTask: URLSessionTask, StreamDelegate, @unchecked 
         }
         
         guard outputStream != nil else {
-            if self.state == .canceling || self.state == .completed {
-                completionHandler(URLError(.cancelled))
-            }
+            let errorCode: URLError.Code = (self.state == .canceling || self.state == .completed) ? .cancelled : .cannotConnectToHost
+            completionHandler(URLError(errorCode))
             return
         }
         

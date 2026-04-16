@@ -8,6 +8,20 @@
 
 import Foundation
 
+private func ftpHelperLog(_ level: String, _ message: String) {
+    NSLog("[FilesProvider.FTP][%@] %@", level, message)
+}
+
+func ftpCommandUnsupportedForMLST(_ response: String) -> Bool {
+    let ftpError = FileProviderFTPError(message: response)
+    switch ftpError.code {
+    case 500, 501, 502, 504:
+        return true
+    default:
+        return false
+    }
+}
+
 internal extension FTPFileProvider {
     func execute(command: String, on task: FileProviderStreamTask, minLength: Int = 4,
                  afterSend: ((_ error: Error?) -> Void)? = nil,
@@ -40,13 +54,15 @@ internal extension FTPFileProvider {
             
             if let data = data, let response = String(data: data, encoding: .utf8) {
                 let lines = response.components(separatedBy: "\n").compactMap { $0.isEmpty ? nil : $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                let hasPreliminaryResponse = lines.contains { $0.hasPrefix("1") }
+                if hasPreliminaryResponse {
+                    afterSend?(error)
+                }
+
                 if let last = lines.last, last.hasPrefix("1") {
                     // 1XX: Need to wait for some other response
                     let timeout = self.session.configuration.timeoutIntervalForResource
                     self.readData(on: task, minLength: minLength, maxLength: maxLength, timeout: timeout, afterSend: afterSend, completionHandler: completionHandler)
-                    
-                    // Call afterSend
-                    afterSend?(error)
                     return
                 }
                 completionHandler(response.trimmingCharacters(in: .whitespacesAndNewlines), nil)
@@ -113,6 +129,7 @@ internal extension FTPFileProvider {
     
     func ftpLogin(_ task: FileProviderStreamTask, completionHandler: @escaping (_ error: Error?) -> Void) {
         let timeout = session.configuration.timeoutIntervalForRequest
+        ftpHelperLog("debug", "FTP login start host=\(self.baseURL?.host ?? "") port=\(self.baseURL?.port ?? 0) scheme=\(self.baseURL?.scheme ?? "")")
         
         var isSecure = false
         // Implicit FTP Connection
@@ -127,12 +144,16 @@ internal extension FTPFileProvider {
         task.readData(ofMinLength: 4, maxLength: 2048, timeout: timeout) { (data, eof, error) in
             do {
                 if let error = error {
+                    ftpHelperLog("error", "FTP login greeting failed error=\((error as NSError).localizedDescription)")
                     throw error
                 }
                 
                 guard let data = data, let response = String(data: data, encoding: .utf8) else {
+                    ftpHelperLog("error", "FTP login greeting parse failed")
                     throw URLError(.cannotParseResponse, url: self.url(of: ""))
                 }
+
+                ftpHelperLog("debug", "FTP greeting response=\(response.trimmingCharacters(in: .whitespacesAndNewlines))")
                 
                 guard response.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("22") else {
                     throw FileProviderFTPError(message: response)
@@ -173,6 +194,7 @@ internal extension FTPFileProvider {
                     self.ftpUserPass(task, completionHandler: completionHandler)
                 }
             } else {
+                ftpHelperLog("debug", "FTP login sending USER/PASS")
                 self.ftpUserPass(task, completionHandler: completionHandler)
             }
         }
@@ -186,6 +208,7 @@ internal extension FTPFileProvider {
         self.execute(command: "PASV", on: task) { (response, error) in
             do {
                 if let error = error {
+                    ftpHelperLog("error", "FTP PASV failed error=\((error as NSError).localizedDescription)")
                     throw error
                 }
                 
@@ -207,6 +230,12 @@ internal extension FTPFileProvider {
                 if host == "127.555.555.555" {
                     host = self.baseURL!.host!
                 }
+
+                if self.preferControlConnectionHostForPassiveDataConnection, let controlHost = self.baseURL?.host {
+                    host = controlHost
+                }
+
+                ftpHelperLog("debug", "FTP PASV data endpoint host=\(host) port=\(port)")
                 
                 let passiveTask = self.session.fpstreamTask(withHostName: host, port: port)
                 if self.baseURL?.scheme == "ftps" || self.baseURL?.scheme == "ftpes" || self.baseURL?.port == 990 {
@@ -339,80 +368,135 @@ internal extension FTPFileProvider {
                 completionHandler([], URLError(.badServerResponse, url: self.url(of: path)))
                 return
             }
-            
-            let success_lock = NSLock()
-            var success = false
+
+            let transferLock = NSLock()
+            var didStartTransfer = false
+            var didFinishTransfer = false
+            var transferData = Data()
+            var transferError: Error?
             let command = useMLST ? "MLSD \(path)" : "LIST \(path)"
-            self.execute(command: command, on: task) { (response, error) in
+            ftpHelperLog("debug", "FTP list command start command=\(command)")
+            self.execute(command: command, on: task, afterSend: { _ in
+                transferLock.lock()
+                guard !didStartTransfer else {
+                    transferLock.unlock()
+                    return
+                }
+                didStartTransfer = true
+                transferLock.unlock()
+                ftpHelperLog("debug", "FTP list data transfer started path=\(path)")
+
+                var finalData = Data()
+
+                defer {
+                    dataTask.closeRead(immediate: true)
+                    dataTask.closeWrite()
+                    transferLock.lock()
+                    didFinishTransfer = true
+                    transferLock.unlock()
+                    ftpHelperLog("debug", "FTP list data transfer finished path=\(path) bytes=\(finalData.count)")
+                }
+
+                let timeout = self.session.configuration.timeoutIntervalForResource
+                var eof = false
+                let errorLock = NSLock()
+                var readError: Error?
+
+                while !eof {
+                    let group = DispatchGroup()
+                    group.enter()
+                    dataTask.readData(ofMinLength: 1, maxLength: Int.max, timeout: timeout) { (data, seof, serror) in
+                        if let data = data {
+                            finalData.append(data)
+                        }
+                        eof = seof
+                        errorLock.lock()
+                        readError = serror
+                        errorLock.unlock()
+                        group.leave()
+                    }
+                    let waitResult = group.wait(timeout: .now() + timeout)
+
+                    errorLock.lock()
+                    if let readError = readError {
+                        errorLock.unlock()
+                        if (readError as? URLError)?.code != .cancelled {
+                            transferLock.lock()
+                            transferError = readError
+                            transferLock.unlock()
+                        }
+                        break
+                    }
+                    errorLock.unlock()
+
+                    if waitResult == .timedOut {
+                        transferLock.lock()
+                        transferError = URLError(.timedOut, url: self.url(of: path))
+                        transferLock.unlock()
+                        ftpHelperLog("error", "FTP list data transfer timed out path=\(path)")
+                        break
+                    }
+                }
+
+                transferLock.lock()
+                transferData = finalData
+                transferLock.unlock()
+            }) { (response, error) in
                 do {
                     if let error = error {
+                        ftpHelperLog("error", "FTP list control response failed path=\(path) error=\((error as NSError).localizedDescription)")
                         throw error
                     }
                     
                     guard let response = response else {
+                        ftpHelperLog("error", "FTP list control response parse failed path=\(path)")
                         throw URLError(.cannotParseResponse, url: self.url(of: path))
                     }
-                    
-                    if response.hasPrefix("500") && useMLST {
-                        dataTask.cancel()
-                        self.supportsRFC3659 = false
-                        throw URLError(.unsupportedURL, url: self.url(of: path))
-                    }
-                    
-                    let timeout = self.session.configuration.timeoutIntervalForRequest
-                    var finalData = Data()
-                    var eof = false
-                    let error_lock = NSLock()
-                    var error: Error?
-                    
-                    while !eof {
-                        let group = DispatchGroup()
-                        group.enter()
-                        dataTask.readData(ofMinLength: 1, maxLength: Int.max, timeout: timeout) { (data, seof, serror) in
-                            if let data = data {
-                                finalData.append(data)
-                            }
-                            eof = seof
-                            error_lock.lock()
-                            error = serror
-                            error_lock.unlock()
-                            group.leave()
-                        }
-                        let waitResult = group.wait(timeout: .now() + timeout)
-                        
-                        error_lock.lock()
-                        if let error = error {
-                            error_lock.unlock()
-                            if (error as? URLError)?.code != .cancelled {
-                                throw error
-                            }
-                            return
-                        }
-                        error_lock.unlock()
-                        
-                        if waitResult == .timedOut {
-                            throw URLError(.timedOut, url: self.url(of: path))
-                        }
-                    }
-                    
-                    guard let dataResponse = String(data: finalData, encoding: .utf8) else {
+
+                    ftpHelperLog("debug", "FTP list final control response path=\(path) response=\(response)")
+                    let responseLines = response.components(separatedBy: "\n")
+                        .compactMap { $0.isEmpty ? nil : $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    guard let lastResponseLine = responseLines.last else {
                         throw URLError(.badServerResponse, url: self.url(of: path))
                     }
                     
+                    if ftpCommandUnsupportedForMLST(lastResponseLine) && useMLST {
+                        dataTask.cancel()
+                        self.supportsRFC3659 = false
+                        ftpHelperLog("debug", "FTP list downgrading from MLSD to LIST path=\(path) response=\(response)")
+                        throw URLError(.unsupportedURL, url: self.url(of: path))
+                    }
+
+                    transferLock.lock()
+                    let didStartTransferNow = didStartTransfer
+                    let didFinishTransferNow = didFinishTransfer
+                    let finalData = transferData
+                    let transferErrorNow = transferError
+                    transferLock.unlock()
+
+                    if didStartTransferNow && !didFinishTransferNow {
+                        throw URLError(.networkConnectionLost, url: self.url(of: path))
+                    }
+
+                    if let transferErrorNow {
+                        ftpHelperLog("error", "FTP list transfer error path=\(path) error=\((transferErrorNow as NSError).localizedDescription)")
+                        throw transferErrorNow
+                    }
+
+                    guard let dataResponse = String(data: finalData, encoding: .utf8) else {
+                        throw URLError(.badServerResponse, url: self.url(of: path))
+                    }
+
                     let contents: [String] = dataResponse.components(separatedBy: "\n")
                         .compactMap({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
-                    success_lock.try()
-                    success = true
-                    success_lock.unlock()
-                    completionHandler(contents, nil)
-                    
-                    success_lock.try()
-                    if !success && !(response.hasPrefix("25") || response.hasPrefix("15")) {
-                        success_lock.unlock()
+
+                    guard lastResponseLine.hasPrefix("2") else {
                         throw FileProviderFTPError(message: response, path: path)
-                    } else {
-                        success_lock.unlock()
                     }
+
+                    ftpHelperLog("debug", "FTP list parsed entries path=\(path) count=\(contents.count)")
+
+                    completionHandler(contents, nil)
                 } catch {
                     self.dispatch_queue.async {
                         completionHandler([], error)

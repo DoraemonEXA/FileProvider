@@ -28,6 +28,26 @@ open class FTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOpera
     
     open class var type: String { return "FTP" }
     public let baseURL: URL?
+
+    /// Timeout for FTP command/control channel requests.
+    ///
+    /// Set this before using the provider. Changing it after the session is initialized
+    /// has no effect for the current session.
+    open var timeoutIntervalForRequest: TimeInterval {
+        willSet {
+            assert(_session == nil, "It's not effective to change timeoutIntervalForRequest after session is initialized.")
+        }
+    }
+
+    /// Timeout for longer FTP operations that may stream data.
+    ///
+    /// Set this before using the provider. Changing it after the session is initialized
+    /// has no effect for the current session.
+    open var timeoutIntervalForResource: TimeInterval {
+        willSet {
+            assert(_session == nil, "It's not effective to change timeoutIntervalForResource after session is initialized.")
+        }
+    }
     
     open var dispatch_queue: DispatchQueue
     open var operation_queue: OperationQueue {
@@ -56,6 +76,8 @@ open class FTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOpera
             if _session == nil {
                 self.sessionDelegate = SessionDelegate(fileProvider: self)
                 let config = URLSessionConfiguration.default
+                config.timeoutIntervalForRequest = timeoutIntervalForRequest
+                config.timeoutIntervalForResource = timeoutIntervalForResource
                 _session = URLSession(configuration: config, delegate: sessionDelegate as URLSessionDelegate?, delegateQueue: self.operation_queue)
                 _session.sessionDescription = UUID().uuidString
                 initEmptySessionHandler(_session.sessionDescription!)
@@ -108,6 +130,9 @@ open class FTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOpera
         self.validatingCache = true
         self.cache = cache
         self.credential = credential
+        let defaultConfiguration = URLSessionConfiguration.default
+        self.timeoutIntervalForRequest = defaultConfiguration.timeoutIntervalForRequest
+        self.timeoutIntervalForResource = defaultConfiguration.timeoutIntervalForResource
         self.supportsRFC3659 = true
         
         let queueLabel = "FileProvider.\(Swift.type(of: self).type)"
@@ -154,6 +179,15 @@ open class FTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOpera
         self.validatingCache       = aDecoder.decodeBool(forKey: "validatingCache")
         self.supportsRFC3659       = aDecoder.decodeBool(forKey: "supportsRFC3659")
         self.securedDataConnection = aDecoder.decodeBool(forKey: "securedDataConnection")
+        if aDecoder.containsValue(forKey: "preferControlConnectionHostForPassiveDataConnection") {
+            self.preferControlConnectionHostForPassiveDataConnection = aDecoder.decodeBool(forKey: "preferControlConnectionHostForPassiveDataConnection")
+        }
+        if aDecoder.containsValue(forKey: "timeoutIntervalForRequest") {
+            self.timeoutIntervalForRequest = aDecoder.decodeDouble(forKey: "timeoutIntervalForRequest")
+        }
+        if aDecoder.containsValue(forKey: "timeoutIntervalForResource") {
+            self.timeoutIntervalForResource = aDecoder.decodeDouble(forKey: "timeoutIntervalForResource")
+        }
     }
     
     public func encode(with aCoder: NSCoder) {
@@ -164,6 +198,9 @@ open class FTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOpera
         aCoder.encode(self.mode.rawValue, forKey: "mode")
         aCoder.encode(self.supportsRFC3659, forKey: "supportsRFC3659")
         aCoder.encode(self.securedDataConnection, forKey: "securedDataConnection")
+        aCoder.encode(self.preferControlConnectionHostForPassiveDataConnection, forKey: "preferControlConnectionHostForPassiveDataConnection")
+        aCoder.encode(self.timeoutIntervalForRequest, forKey: "timeoutIntervalForRequest")
+        aCoder.encode(self.timeoutIntervalForResource, forKey: "timeoutIntervalForResource")
     }
     
     public static var supportsSecureCoding: Bool {
@@ -177,7 +214,10 @@ open class FTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOpera
         copy.useCache = self.useCache
         copy.validatingCache = self.validatingCache
         copy.securedDataConnection = self.securedDataConnection
+        copy.preferControlConnectionHostForPassiveDataConnection = self.preferControlConnectionHostForPassiveDataConnection
         copy.supportsRFC3659 = self.supportsRFC3659
+        copy.timeoutIntervalForRequest = self.timeoutIntervalForRequest
+        copy.timeoutIntervalForResource = self.timeoutIntervalForResource
         return copy
     }
     
@@ -211,6 +251,15 @@ open class FTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOpera
      `true` value indicates to use `PROT P`. Default is `true`.
     */
     public var securedDataConnection: Bool = true
+
+    /**
+     Prefer using the control connection host for passive data connections.
+
+     Some servers return an unroutable host in PASV responses (especially behind NAT).
+     Enabling this keeps data connections aligned with the control endpoint host.
+     Default is `true`.
+    */
+    public var preferControlConnectionHostForPassiveDataConnection: Bool = true
     
     /**
      Trust all certificates if `disableEvaluation`, Otherwise validate certificate chain.
@@ -318,9 +367,10 @@ open class FTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOpera
                         throw URLError(.badServerResponse, url: self.url(of: path))
                     }
                     
-                    if response.hasPrefix("500") {
+                    if ftpCommandUnsupportedForMLST(response) {
                         self.supportsRFC3659 = false
                         self.attributesOfItem(path: path, rfc3659enabled: false, completionHandler: completionHandler)
+                        return
                     }
                     
                     let lines = response.components(separatedBy: "\n").compactMap { $0.isEmpty ? nil : $0.trimmingCharacters(in: .whitespacesAndNewlines) }
