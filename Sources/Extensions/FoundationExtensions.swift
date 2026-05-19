@@ -253,12 +253,6 @@ public struct ContentMIMEType: RawRepresentable, Hashable, Equatable, Sendable {
 
 internal extension URLRequest {
     mutating func setValue(authentication credential: URLCredential?, with type: AuthenticationType) {
-        func base64(_ str: String) -> String {
-            let plainData = str.data(using: .utf8)
-            let base64String = plainData!.base64EncodedString(options: [])
-            return base64String
-        }
-        
         guard let credential = credential else { return }
         switch type {
         case .basic:

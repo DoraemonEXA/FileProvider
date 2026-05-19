@@ -226,11 +226,20 @@ open class WebDAVFileProvider: HTTPFileProvider, FileProviderSharing {
      */
     @discardableResult
     open func searchFiles(path: String, recursive: Bool, query: NSPredicate, including: [URLResourceKey], foundItemHandler: ((FileObject) -> Void)?, completionHandler: @escaping (_ files: [FileObject], _ error: Error?) -> Void) -> Progress? {
+        if recursive {
+            return searchFilesRecursively(
+                path: path,
+                query: query,
+                including: including,
+                foundItemHandler: foundItemHandler,
+                completionHandler: completionHandler
+            )
+        }
+
         let url = self.url(of: path)
         var request = URLRequest(url: url)
         request.httpMethod = "PROPFIND"
-        // Depth infinity is disabled on some servers. Implement workaround?!
-        request.setValue(recursive ? "infinity" : "1", forHTTPHeaderField: "Depth")
+        request.setValue("1", forHTTPHeaderField: "Depth")
         request.setValue(authentication: credential, with: credentialType)
         request.setValue(contentType: .xml, charset: .utf8)
         request.httpBody = WebDavFileObject.xmlProp(including)
@@ -239,29 +248,29 @@ open class WebDAVFileProvider: HTTPFileProvider, FileProviderSharing {
         
         let queryIsTruePredicate = query.predicateFormat == "TRUEPREDICATE"
         let task = session.dataTask(with: request) { (data, response, error) in
-            // FIXME: paginating results
-            var responseError: FileProviderHTTPError?
-            if let code = (response as? HTTPURLResponse)?.statusCode , code >= 300, let rCode = FileProviderHTTPErrorCode(rawValue: code) {
-                responseError = self.serverError(with: rCode, path: path, data: data)
-            }
-            guard let data = data else {
-                completionHandler([], responseError ?? error)
+            let parseResult = self.parseDirectoryEntries(
+                path: path,
+                requestedURL: url,
+                data: data,
+                response: response,
+                error: error
+            )
+            guard parseResult.error == nil else {
+                completionHandler([], parseResult.error)
                 return
             }
-            
-            let xresponse = DavResponse.parse(xmlResponse: data, baseURL: self.baseURL)
+
             var fileObjects = [WebDavFileObject]()
-            for attr in xresponse where attr.href.path != url.path {
-                let fileObject = WebDavFileObject(attr)
+            for fileObject in parseResult.entries {
                 if !queryIsTruePredicate && !query.evaluate(with: fileObject.mapPredicate()) {
                     continue
                 }
-                
+
                 fileObjects.append(fileObject)
                 progress.completedUnitCount = Int64(fileObjects.count)
                 foundItemHandler?(fileObject)
             }
-            completionHandler(fileObjects, responseError ?? error)
+            completionHandler(fileObjects, nil)
         }
         progress.cancellationHandler = { [weak task] in
             task?.cancel()
@@ -269,6 +278,143 @@ open class WebDAVFileProvider: HTTPFileProvider, FileProviderSharing {
         progress.setUserInfoObject(Date(), forKey: .startingTimeKey)
         task.resume()
         return progress
+    }
+
+    private func searchFilesRecursively(
+        path: String,
+        query: NSPredicate,
+        including: [URLResourceKey],
+        foundItemHandler: ((FileObject) -> Void)?,
+        completionHandler: @escaping (_ files: [FileObject], _ error: Error?) -> Void
+    ) -> Progress {
+        final class State: @unchecked Sendable {
+            var pendingPaths: [String]
+            var visitedURLPaths: Set<String> = []
+            var matchedEntries: [WebDavFileObject] = []
+            var activeTask: URLSessionTask?
+
+            init(path: String) {
+                self.pendingPaths = [path]
+            }
+        }
+
+        let rootURL = self.url(of: path)
+        let progress = Progress(totalUnitCount: -1)
+        progress.setUserInfoObject(rootURL, forKey: .fileURLKey)
+        progress.setUserInfoObject(Date(), forKey: .startingTimeKey)
+
+        let stateQueue = DispatchQueue(label: "FileProvider.WebDAV.recursive-search")
+        let state = State(path: path)
+        let queryIsTruePredicate = query.predicateFormat == "TRUEPREDICATE"
+
+        func finish(_ error: Error?) {
+            completionHandler(state.matchedEntries, error)
+        }
+
+        func scheduleNext() {
+            if progress.isCancelled {
+                finish(URLError(.cancelled))
+                return
+            }
+
+            guard !state.pendingPaths.isEmpty else {
+                finish(nil)
+                return
+            }
+
+            let currentPath = state.pendingPaths.removeFirst()
+            let currentURL = self.url(of: currentPath)
+            if state.visitedURLPaths.contains(currentURL.path) {
+                scheduleNext()
+                return
+            }
+            state.visitedURLPaths.insert(currentURL.path)
+
+            var request = URLRequest(url: currentURL)
+            request.httpMethod = "PROPFIND"
+            request.setValue("1", forHTTPHeaderField: "Depth")
+            request.setValue(authentication: self.credential, with: self.credentialType)
+            request.setValue(contentType: .xml, charset: .utf8)
+            request.httpBody = WebDavFileObject.xmlProp(including)
+
+            state.activeTask = self.session.dataTask(with: request) { data, response, error in
+                stateQueue.async {
+                    let parseResult = self.parseDirectoryEntries(
+                        path: currentPath,
+                        requestedURL: currentURL,
+                        data: data,
+                        response: response,
+                        error: error
+                    )
+
+                    guard parseResult.error == nil else {
+                        finish(parseResult.error)
+                        return
+                    }
+
+                    for entry in parseResult.entries {
+                        if entry.isDirectory {
+                            let entryURLPath = self.url(of: entry.path).path
+                            if !state.visitedURLPaths.contains(entryURLPath) {
+                                state.pendingPaths.append(entry.path)
+                            }
+                        }
+
+                        if !queryIsTruePredicate && !query.evaluate(with: entry.mapPredicate()) {
+                            continue
+                        }
+
+                        state.matchedEntries.append(entry)
+                        progress.completedUnitCount = Int64(state.matchedEntries.count)
+                        foundItemHandler?(entry)
+                    }
+
+                    scheduleNext()
+                }
+            }
+            state.activeTask?.resume()
+        }
+
+        progress.cancellationHandler = {
+            stateQueue.async {
+                state.activeTask?.cancel()
+                state.pendingPaths.removeAll()
+            }
+        }
+
+        stateQueue.async {
+            scheduleNext()
+        }
+
+        return progress
+    }
+
+    private func parseDirectoryEntries(
+        path: String,
+        requestedURL: URL,
+        data: Data?,
+        response: URLResponse?,
+        error: Error?
+    ) -> (entries: [WebDavFileObject], error: Error?) {
+        if let code = (response as? HTTPURLResponse)?.statusCode,
+           code >= 300,
+           let responseCode = FileProviderHTTPErrorCode(rawValue: code) {
+            return ([], self.serverError(with: responseCode, path: path, data: data))
+        }
+
+        if let error = error {
+            return ([], error)
+        }
+
+        guard let data = data else {
+            return ([], URLError(.cannotParseResponse, url: requestedURL))
+        }
+
+        let xresponse = DavResponse.parse(xmlResponse: data, baseURL: self.baseURL)
+        let entries = xresponse
+            .filter { $0.href.path != requestedURL.path }
+            .map(WebDavFileObject.init)
+        return (entries, nil)
     }
     
     override open func isReachable(completionHandler: @escaping (_ success: Bool, _ error: Error?) -> Void) {
@@ -404,7 +550,7 @@ open class WebDAVFileProvider: HTTPFileProvider, FileProviderSharing {
 
 extension WebDAVFileProvider: ExtendedFileProvider {
     #if os(macOS) || os(iOS) || os(tvOS)
-    open func thumbnailOfFileSupported(path: String) -> Bool {
+    public func thumbnailOfFileSupported(path: String) -> Bool {
         guard self.baseURL?.host?.contains("dav.yandex.") ?? false else {
             return false
         }
@@ -413,7 +559,7 @@ extension WebDAVFileProvider: ExtendedFileProvider {
     }
     
     @discardableResult
-    open func thumbnailOfFile(path: String, dimension: CGSize?, completionHandler: @escaping ((ImageClass?, Error?) -> Void)) -> Progress? {
+    public func thumbnailOfFile(path: String, dimension: CGSize?, completionHandler: @escaping ((ImageClass?, Error?) -> Void)) -> Progress? {
         guard self.baseURL?.host?.contains("dav.yandex.") ?? false else {
             dispatch_queue.async {
                 completionHandler(nil, URLError(.resourceUnavailable, url: self.url(of: path)))
@@ -441,14 +587,22 @@ extension WebDAVFileProvider: ExtendedFileProvider {
     }
     #endif
     
-    open func propertiesOfFileSupported(path: String) -> Bool {
-        return false
+    public func propertiesOfFileSupported(path: String) -> Bool {
+        return true
     }
     
     @discardableResult
-    open func propertiesOfFile(path: String, completionHandler: @escaping (([String : Any], [String], Error?) -> Void)) -> Progress? {
-        dispatch_queue.async {
-            completionHandler([:], [], URLError(.resourceUnavailable, url: self.url(of: path)))
+    public func propertiesOfFile(path: String, completionHandler: @escaping (([String : Any], [String], Error?) -> Void)) -> Progress? {
+        attributesOfItem(path: path, including: []) { attributes, error in
+            guard let object = attributes as? WebDavFileObject else {
+                completionHandler([:], [], error)
+                return
+            }
+
+            let values = object.allValues.reduce(into: [String: Any]()) { result, pair in
+                result[pair.key.rawValue] = pair.value
+            }
+            completionHandler(values, [], error)
         }
         return nil
     }
@@ -526,7 +680,7 @@ struct DavResponse {
         }
         for propItemNode in propStatNode[proptag].children {
             let key = propItemNode.name.components(separatedBy: ":").last!.lowercased()
-            guard propDic.index(forKey: key) == nil else { continue }
+            guard propDic[key] == nil else { continue }
             propDic[key] = propItemNode.value
             if key == "resourcetype" && propItemNode.xml.contains("collection") {
                 propDic["getcontenttype"] = ContentMIMEType.directory.rawValue

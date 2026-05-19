@@ -44,16 +44,11 @@ All functions do async calls and it wont block your main thread.
 
 ## Requirements
 
-- **Swift 4.0 or higher**
-- iOS 8.0 , OSX 10.10
-- XCode 9.0
-
-Legacy version is available in swift-3 branch.
+- **Swift 6.0 or higher**
+- Xcode 16.0 or higher
+- Apple platform minimum versions depend on your app target and the specific provider features you use.
 
 ## Installation
-
-### Important: this library has been renamed to avoid conflict in iOS 11, macOS 10.13 and Xcode 9.0. Please read issue [#53](https://github.com/amosavian/FileProvider/issues/53) to find more.
-
 
 ### Cocoapods / Carthage / Swift Package Manager
 
